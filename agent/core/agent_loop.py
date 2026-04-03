@@ -152,6 +152,35 @@ _MAX_LLM_RETRIES = 3
 _LLM_RETRY_DELAYS = [5, 15, 30]  # seconds between retries
 
 
+def _append_failure_warning(
+    output: str,
+    tool_name: str,
+    tool_error_counts: dict[str, int],
+    max_failures: int,
+) -> str:
+    """Track a tool failure and append a warning to the output.
+
+    Returns the output with an appended warning indicating how many
+    failures have occurred and whether the LLM should switch approach.
+    """
+    tool_error_counts[tool_name] = tool_error_counts.get(tool_name, 0) + 1
+    count = tool_error_counts[tool_name]
+    if count >= max_failures:
+        return output + (
+            f"\n\n⚠ Tool '{tool_name}' has now failed "
+            f"{count} times this turn. You should try a "
+            f"different approach instead of calling this "
+            f"tool again."
+        )
+    remaining = max_failures - count
+    return output + (
+        f"\n\n⚠ Tool '{tool_name}' has failed "
+        f"{count}/{max_failures} times this turn. "
+        f"{remaining} attempt(s) before you should "
+        f"switch to a different approach."
+    )
+
+
 def _is_transient_error(error: Exception) -> bool:
     """Return True for errors that are likely transient and worth retrying."""
     err_str = str(error).lower()
@@ -283,8 +312,10 @@ class Handlers:
         iteration = 0
         final_response = None
         errored = False
+        tool_error_counts: dict[str, int] = {}
 
-        while iteration < max_iterations:
+        effective_max = min(max_iterations, session.config.max_requests_per_turn)
+        while iteration < effective_max:
             # ── Cancellation check: before LLM call ──
             if session.is_cancelled:
                 break
@@ -608,7 +639,15 @@ class Handlers:
                     results = gather_task.result()
 
                     # 4. Record results and send outputs (order preserved)
+                    max_failures = session.config.max_tool_failures_per_turn
                     for tc, tool_name, tool_args, output, success in results:
+                        if not success:
+                            output = _append_failure_warning(
+                                output, tool_name, tool_error_counts, max_failures,
+                            )
+                        else:
+                            tool_error_counts.pop(tool_name, None)
+
                         tool_msg = Message(
                             role="tool",
                             content=output,

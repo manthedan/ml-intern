@@ -23,6 +23,8 @@ class Config(BaseModel):
     session_dataset_repo: str = "akseljoonas/hf-agent-sessions"
     auto_save_interval: int = 3  # Save every N user turns (0 = disabled)
     yolo_mode: bool = False  # Auto-approve all tool calls without confirmation
+    max_tool_failures_per_turn: int = 3  # Disable a tool after this many failures in one turn
+    max_requests_per_turn: int = 50  # Hard cap on LLM requests per agent turn
 
     # Permission control parameters
     confirm_cpu_jobs: bool = True
