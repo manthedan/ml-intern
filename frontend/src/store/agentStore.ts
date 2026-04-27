@@ -147,6 +147,11 @@ interface AgentStore {
   // Job statuses (tool_call_id -> job status) for HF jobs
   jobStatuses: Record<string, string>;
 
+  // Trackio dashboard config per tool call (tool_call_id -> {spaceId, project?})
+  // Set by hf_jobs / sandbox_create tools when the agent declares trackio_space_id;
+  // the UI uses it to embed the live dashboard via an iframe.
+  trackioDashboards: Record<string, { spaceId: string; project?: string }>;
+
   // Tool error states (tool_call_id -> true if errored) - persisted across renders
   toolErrors: Record<string, boolean>;
 
@@ -199,6 +204,9 @@ interface AgentStore {
 
   setJobStatus: (toolCallId: string, status: string) => void;
   getJobStatus: (toolCallId: string) => string | undefined;
+
+  setTrackioDashboard: (toolCallId: string, spaceId: string, project?: string) => void;
+  getTrackioDashboard: (toolCallId: string) => { spaceId: string; project?: string } | undefined;
 
   setToolError: (toolCallId: string, hasError: boolean) => void;
   getToolError: (toolCallId: string) => boolean | undefined;
@@ -264,6 +272,26 @@ function saveRejectedTools(rejected: Record<string, boolean>): void {
   }
 }
 
+// Trackio dashboards survive a page reload — without persistence the iframe
+// disappears whenever the user refreshes mid-job, which is the exact moment
+// they'd want to keep watching it.
+function loadTrackioDashboards(): Record<string, { spaceId: string; project?: string }> {
+  try {
+    const stored = localStorage.getItem('hf-agent-trackio-dashboards');
+    return stored ? JSON.parse(stored) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveTrackioDashboards(dashboards: Record<string, { spaceId: string; project?: string }>): void {
+  try {
+    localStorage.setItem('hf-agent-trackio-dashboards', JSON.stringify(dashboards));
+  } catch (e) {
+    console.warn('Failed to persist trackio dashboards:', e);
+  }
+}
+
 export const useAgentStore = create<AgentStore>()((set, get) => ({
   sessionStates: {},
   activeSessionId: null,
@@ -287,6 +315,7 @@ export const useAgentStore = create<AgentStore>()((set, get) => ({
   approvalNamespaces: {},
   jobUrls: {},
   jobStatuses: {},
+  trackioDashboards: loadTrackioDashboards(),
   toolErrors: loadToolErrors(),
   rejectedTools: loadRejectedTools(),
 
@@ -484,6 +513,26 @@ export const useAgentStore = create<AgentStore>()((set, get) => ({
   },
 
   getJobStatus: (toolCallId) => get().jobStatuses[toolCallId],
+
+  // ── Trackio Dashboards ──────────────────────────────────────────────
+
+  setTrackioDashboard: (toolCallId, spaceId, project) => {
+    set((state) => {
+      const existing = state.trackioDashboards[toolCallId];
+      // Don't churn the object if nothing changed (avoids extra renders).
+      if (existing && existing.spaceId === spaceId && existing.project === project) {
+        return {};
+      }
+      const updated = {
+        ...state.trackioDashboards,
+        [toolCallId]: { spaceId, ...(project ? { project } : {}) },
+      };
+      saveTrackioDashboards(updated);
+      return { trackioDashboards: updated };
+    });
+  },
+
+  getTrackioDashboard: (toolCallId) => get().trackioDashboards[toolCallId],
 
   // ── Tool Errors ─────────────────────────────────────────────────────
 
