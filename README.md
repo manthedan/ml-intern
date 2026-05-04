@@ -27,7 +27,7 @@ Create a `.env` file in the project root (or export these in your shell):
 
 ```bash
 ANTHROPIC_API_KEY=<your-anthropic-api-key> # if using anthropic models
-OPENAI_API_KEY=<your-openai-api-key> # if using openai models
+OPENAI_API_KEY=<your-openai-api-key> # if using openai models with API billing
 HF_TOKEN=<your-hugging-face-token>
 GITHUB_TOKEN=<github-personal-access-token> 
 ```
@@ -55,6 +55,31 @@ ml-intern --model openai/gpt-5.5 "your prompt"
 ml-intern --max-iterations 100 "your prompt"
 ml-intern --no-stream "your prompt"
 ```
+
+### OpenAI subscription auth via Codex
+
+ML Intern can reuse Codex CLI's ChatGPT subscription auth for `openai/...` models instead of requiring an `OPENAI_API_KEY`.
+
+First sign in with Codex:
+
+```bash
+codex login
+```
+
+Then enable Codex auth for ML Intern:
+
+```bash
+export ML_INTERN_OPENAI_CODEX_AUTH=1
+ml-intern --model openai/gpt-5.5 "your prompt"
+```
+
+By default ML Intern reads Codex credentials from `~/.codex/auth.json` or `$CODEX_HOME/auth.json`. To point at a different file:
+
+```bash
+export ML_INTERN_CODEX_AUTH_FILE=/path/to/auth.json
+```
+
+If Codex auth is not enabled, `openai/...` models continue to use LiteLLM's normal `OPENAI_API_KEY` behavior.
 
 ## Sharing Traces
 

@@ -6,7 +6,8 @@ from agent.core.llm_params import (
 )
 
 
-def test_openai_xhigh_effort_is_forwarded():
+def test_openai_xhigh_effort_is_forwarded(monkeypatch):
+    monkeypatch.delenv("ML_INTERN_OPENAI_CODEX_AUTH", raising=False)
     params = _resolve_llm_params(
         "openai/gpt-5.5",
         reasoning_effort="xhigh",
@@ -15,6 +16,21 @@ def test_openai_xhigh_effort_is_forwarded():
 
     assert params["model"] == "openai/gpt-5.5"
     assert params["reasoning_effort"] == "xhigh"
+
+
+def test_openai_codex_subscription_auth_sets_bearer(monkeypatch, tmp_path):
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        '{"tokens":{"access_token":"codex-access","refresh_token":"refresh"},"last_refresh":"2099-01-01T00:00:00Z"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ML_INTERN_OPENAI_CODEX_AUTH", "1")
+    monkeypatch.setenv("ML_INTERN_CODEX_AUTH_FILE", str(auth_file))
+
+    params = _resolve_llm_params("openai/gpt-5.5")
+
+    assert params["api_key"] == "codex-access"
+    assert params["extra_headers"] == {"Authorization": "Bearer codex-access"}
 
 
 def test_openai_max_effort_is_still_rejected():

@@ -5,6 +5,10 @@ can import it without pulling in the whole agent loop / tool router and
 creating circular imports.
 """
 
+from agent.core.codex_auth import (
+    codex_subscription_auth_enabled,
+    load_codex_subscription_auth,
+)
 from agent.core.hf_tokens import get_hf_bill_to, resolve_hf_router_token
 
 
@@ -112,7 +116,10 @@ def _resolve_llm_params(
       to no thinking.
 
     • ``openai/<model>`` — ``reasoning_effort`` forwarded as a top-level
-      kwarg (GPT-5 / o-series). LiteLLM uses the user's ``OPENAI_API_KEY``.
+      kwarg (GPT-5 / o-series). LiteLLM uses the user's ``OPENAI_API_KEY`` by
+      default. If ``ML_INTERN_OPENAI_CODEX_AUTH=1`` is set, ML Intern instead
+      reuses Codex CLI ChatGPT subscription auth from ``~/.codex/auth.json``
+      (or ``ML_INTERN_CODEX_AUTH_FILE``).
 
     • Anything else is treated as a HuggingFace router id. We hit the
       auto-routing OpenAI-compatible endpoint at
@@ -170,6 +177,13 @@ def _resolve_llm_params(
 
     if model_name.startswith("openai/"):
         params = {"model": model_name}
+        if codex_subscription_auth_enabled():
+            codex_auth = load_codex_subscription_auth()
+            if codex_auth is not None:
+                params["api_key"] = codex_auth.access_token
+                params["extra_headers"] = {
+                    "Authorization": f"Bearer {codex_auth.access_token}",
+                }
         if reasoning_effort:
             if reasoning_effort not in _OPENAI_EFFORTS:
                 if strict:
