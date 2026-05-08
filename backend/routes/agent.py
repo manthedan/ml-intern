@@ -34,6 +34,7 @@ from session_manager import MAX_SESSIONS, AgentSession, SessionCapacityError, se
 
 import user_quotas
 
+from agent.core.codex_client import call_codex_litellm_response, is_codex_subscription_params
 from agent.core.hf_access import get_jobs_access
 from agent.core.hf_tokens import resolve_hf_request_token, resolve_hf_router_token
 from agent.core.llm_params import _resolve_llm_params
@@ -252,12 +253,22 @@ async def llm_health_check() -> LLMHealthResponse:
     model = session_manager.config.model_name
     try:
         llm_params = _resolve_llm_params(model, reasoning_effort="high")
-        await acompletion(
-            messages=[{"role": "user", "content": "hi"}],
-            max_tokens=1,
-            timeout=10,
-            **llm_params,
-        )
+        if is_codex_subscription_params(llm_params):
+            await call_codex_litellm_response(
+                session=None,
+                messages=[{"role": "user", "content": "hi"}],
+                tools=None,
+                llm_params=llm_params,
+                stream=False,
+                timeout=10,
+            )
+        else:
+            await acompletion(
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=1,
+                timeout=10,
+                **llm_params,
+            )
         return LLMHealthResponse(status="ok", model=model)
     except Exception as e:
         err_str = str(e).lower()

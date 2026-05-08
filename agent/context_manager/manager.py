@@ -14,6 +14,7 @@ import yaml
 from jinja2 import Template
 from litellm import Message, acompletion
 
+from agent.core.codex_client import call_codex_litellm_response, is_codex_subscription_params
 from agent.core.prompt_caching import with_prompt_caching
 
 logger = logging.getLogger(__name__)
@@ -130,12 +131,21 @@ async def summarize_messages(
         prompt_messages, tool_specs, llm_params.get("model")
     )
     _t0 = time.monotonic()
-    response = await acompletion(
-        messages=prompt_messages,
-        max_completion_tokens=max_tokens,
-        tools=tool_specs,
-        **llm_params,
-    )
+    if is_codex_subscription_params(llm_params):
+        response = await call_codex_litellm_response(
+            session=session,
+            messages=prompt_messages,
+            tools=tool_specs,
+            llm_params=llm_params,
+            stream=False,
+        )
+    else:
+        response = await acompletion(
+            messages=prompt_messages,
+            max_completion_tokens=max_tokens,
+            tools=tool_specs,
+            **llm_params,
+        )
     if session is not None:
         from agent.core import telemetry
         await telemetry.record_llm_call(

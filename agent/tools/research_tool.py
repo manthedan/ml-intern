@@ -15,6 +15,7 @@ from typing import Any
 from litellm import Message, acompletion
 
 from agent.core import telemetry
+from agent.core.codex_client import call_codex_litellm_response, is_codex_subscription_params
 from agent.core.doom_loop import check_for_doom_loop
 from agent.core.llm_params import _resolve_llm_params
 from agent.core.prompt_caching import with_prompt_caching
@@ -335,13 +336,23 @@ async def research_handler(
             try:
                 _msgs, _ = with_prompt_caching(messages, None, llm_params.get("model"))
                 _t0 = time.monotonic()
-                response = await acompletion(
-                    messages=_msgs,
-                    tools=None,  # no tools — force text response
-                    stream=False,
-                    timeout=120,
-                    **llm_params,
-                )
+                if is_codex_subscription_params(llm_params):
+                    response = await call_codex_litellm_response(
+                        session=session,
+                        messages=_msgs,
+                        tools=None,
+                        llm_params=llm_params,
+                        stream=False,
+                        timeout=120,
+                    )
+                else:
+                    response = await acompletion(
+                        messages=_msgs,
+                        tools=None,  # no tools — force text response
+                        stream=False,
+                        timeout=120,
+                        **llm_params,
+                    )
                 # Telemetry is best-effort; a logging blip must never mask a
                 # valid LLM response (the surrounding except would convert it
                 # to "summary call failed").
@@ -378,14 +389,24 @@ async def research_handler(
                 messages, tool_specs if tool_specs else None, llm_params.get("model")
             )
             _t0 = time.monotonic()
-            response = await acompletion(
-                messages=_msgs,
-                tools=_tools,
-                tool_choice="auto",
-                stream=False,
-                timeout=120,
-                **llm_params,
-            )
+            if is_codex_subscription_params(llm_params):
+                response = await call_codex_litellm_response(
+                    session=session,
+                    messages=_msgs,
+                    tools=_tools,
+                    llm_params=llm_params,
+                    stream=False,
+                    timeout=120,
+                )
+            else:
+                response = await acompletion(
+                    messages=_msgs,
+                    tools=_tools,
+                    tool_choice="auto",
+                    stream=False,
+                    timeout=120,
+                    **llm_params,
+                )
             try:
                 await telemetry.record_llm_call(
                     session,
@@ -489,13 +510,23 @@ async def research_handler(
     try:
         _msgs, _ = with_prompt_caching(messages, None, llm_params.get("model"))
         _t0 = time.monotonic()
-        response = await acompletion(
-            messages=_msgs,
-            tools=None,
-            stream=False,
-            timeout=120,
-            **llm_params,
-        )
+        if is_codex_subscription_params(llm_params):
+            response = await call_codex_litellm_response(
+                session=session,
+                messages=_msgs,
+                tools=None,
+                llm_params=llm_params,
+                stream=False,
+                timeout=120,
+            )
+        else:
+            response = await acompletion(
+                messages=_msgs,
+                tools=None,
+                stream=False,
+                timeout=120,
+                **llm_params,
+            )
         try:
             await telemetry.record_llm_call(
                 session,

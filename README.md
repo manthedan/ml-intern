@@ -58,7 +58,7 @@ ml-intern --no-stream "your prompt"
 
 ### OpenAI subscription auth via Codex
 
-ML Intern can reuse Codex CLI's ChatGPT subscription auth for `openai/...` models instead of requiring an `OPENAI_API_KEY`.
+ML Intern can reuse Codex CLI's ChatGPT subscription auth for `openai/...` models instead of requiring an `OPENAI_API_KEY`. When enabled, ML Intern sends requests to the ChatGPT/Codex backend (`chatgpt.com/backend-api/codex/responses`) with Codex-compatible headers instead of sending the subscription bearer to the normal OpenAI API, which would fail with `missing_scope: model.request`.
 
 First sign in with Codex:
 

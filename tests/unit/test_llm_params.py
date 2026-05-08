@@ -18,7 +18,7 @@ def test_openai_xhigh_effort_is_forwarded(monkeypatch):
     assert params["reasoning_effort"] == "xhigh"
 
 
-def test_openai_codex_subscription_auth_sets_bearer(monkeypatch, tmp_path):
+def test_openai_codex_subscription_auth_uses_codex_transport_marker(monkeypatch, tmp_path):
     auth_file = tmp_path / "auth.json"
     auth_file.write_text(
         '{"tokens":{"access_token":"codex-access","refresh_token":"refresh"},"last_refresh":"2099-01-01T00:00:00Z"}',
@@ -29,8 +29,9 @@ def test_openai_codex_subscription_auth_sets_bearer(monkeypatch, tmp_path):
 
     params = _resolve_llm_params("openai/gpt-5.5")
 
-    assert params["api_key"] == "codex-access"
-    assert params["extra_headers"] == {"Authorization": "Bearer codex-access"}
+    assert "api_key" not in params
+    assert "extra_headers" not in params
+    assert params["_ml_intern_codex_auth"].access_token == "codex-access"
 
 
 def test_openai_max_effort_is_still_rejected():

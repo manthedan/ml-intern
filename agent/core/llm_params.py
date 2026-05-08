@@ -180,10 +180,11 @@ def _resolve_llm_params(
         if codex_subscription_auth_enabled():
             codex_auth = load_codex_subscription_auth()
             if codex_auth is not None:
-                params["api_key"] = codex_auth.access_token
-                params["extra_headers"] = {
-                    "Authorization": f"Bearer {codex_auth.access_token}",
-                }
+                # ChatGPT/Codex subscription tokens are not OpenAI API keys and
+                # do not have the model.request scope required by api.openai.com.
+                # Mark these params for agent_loop to use the Codex/ChatGPT
+                # backend transport instead of passing the bearer to LiteLLM.
+                params["_ml_intern_codex_auth"] = codex_auth
         if reasoning_effort:
             if reasoning_effort not in _OPENAI_EFFORTS:
                 if strict:

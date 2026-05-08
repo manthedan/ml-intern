@@ -28,6 +28,7 @@ from typing import Any
 
 from litellm import acompletion
 
+from agent.core.codex_client import call_codex_litellm_response, is_codex_subscription_params
 from agent.core.llm_params import UnsupportedEffortError, _resolve_llm_params
 
 logger = logging.getLogger(__name__)
@@ -184,15 +185,27 @@ async def probe_effort(
         attempts += 1
         try:
             _t0 = time.monotonic()
-            response = await asyncio.wait_for(
-                acompletion(
-                    messages=[{"role": "user", "content": "ping"}],
-                    max_tokens=_PROBE_MAX_TOKENS,
-                    stream=False,
-                    **params,
-                ),
-                timeout=_PROBE_TIMEOUT,
-            )
+            if is_codex_subscription_params(params):
+                response = await asyncio.wait_for(
+                    call_codex_litellm_response(
+                        session=session,
+                        messages=[{"role": "user", "content": "ping"}],
+                        tools=None,
+                        llm_params=params,
+                        stream=False,
+                    ),
+                    timeout=_PROBE_TIMEOUT,
+                )
+            else:
+                response = await asyncio.wait_for(
+                    acompletion(
+                        messages=[{"role": "user", "content": "ping"}],
+                        max_tokens=_PROBE_MAX_TOKENS,
+                        stream=False,
+                        **params,
+                    ),
+                    timeout=_PROBE_TIMEOUT,
+                )
             if session is not None:
                 # Best-effort telemetry — never let a logging blip propagate
                 # out of the probe and break model switching.

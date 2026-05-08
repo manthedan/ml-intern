@@ -28,6 +28,7 @@ from agent.messaging.gateway import NotificationGateway
 from agent.core import telemetry
 from agent.core.doom_loop import check_for_doom_loop
 from agent.core.llm_params import _resolve_llm_params
+from agent.core.codex_client import call_codex_responses, is_codex_subscription_params
 from agent.core.prompt_caching import with_prompt_caching
 from agent.core.session import Event, OpType, Session
 from agent.core.tools import ToolRouter
@@ -733,6 +734,35 @@ async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> 
     _healed_thinking_signature = False
     messages, tools = with_prompt_caching(messages, tools, llm_params.get("model"))
     t_start = time.monotonic()
+    if is_codex_subscription_params(llm_params):
+        async def _emit_delta(delta: str) -> None:
+            await session.send_event(
+                Event(event_type="assistant_chunk", data={"content": delta})
+            )
+
+        codex_result = await call_codex_responses(
+            session=session,
+            messages=messages,
+            tools=tools,
+            llm_params=llm_params,
+            stream=True,
+            on_text_delta=_emit_delta,
+        )
+        usage = await telemetry.record_llm_call(
+            session,
+            model=llm_params.get("model", session.config.model_name),
+            response=codex_result.usage_response,
+            latency_ms=int((time.monotonic() - t_start) * 1000),
+            finish_reason=codex_result.finish_reason,
+        )
+        return LLMResult(
+            content=codex_result.content,
+            tool_calls_acc=codex_result.tool_calls_acc,
+            token_count=codex_result.token_count,
+            finish_reason=codex_result.finish_reason,
+            usage=usage,
+        )
+
     for _llm_attempt in range(_MAX_LLM_RETRIES):
         try:
             response = await acompletion(
@@ -867,6 +897,33 @@ async def _call_llm_non_streaming(session: Session, messages, tools, llm_params)
     _healed_thinking_signature = False
     messages, tools = with_prompt_caching(messages, tools, llm_params.get("model"))
     t_start = time.monotonic()
+    if is_codex_subscription_params(llm_params):
+        codex_result = await call_codex_responses(
+            session=session,
+            messages=messages,
+            tools=tools,
+            llm_params=llm_params,
+            stream=False,
+        )
+        if codex_result.content:
+            await session.send_event(
+                Event(event_type="assistant_message", data={"content": codex_result.content})
+            )
+        usage = await telemetry.record_llm_call(
+            session,
+            model=llm_params.get("model", session.config.model_name),
+            response=codex_result.usage_response,
+            latency_ms=int((time.monotonic() - t_start) * 1000),
+            finish_reason=codex_result.finish_reason,
+        )
+        return LLMResult(
+            content=codex_result.content,
+            tool_calls_acc=codex_result.tool_calls_acc,
+            token_count=codex_result.token_count,
+            finish_reason=codex_result.finish_reason,
+            usage=usage,
+        )
+
     for _llm_attempt in range(_MAX_LLM_RETRIES):
         try:
             response = await acompletion(
