@@ -22,7 +22,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from agent.core.codex_auth import CodexSubscriptionAuth
+from agent.core.codex_auth import CodexSubscriptionAuth, load_codex_subscription_auth, refresh_codex_subscription_auth
 
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
 CODEX_BASE_URL_ENV_VAR = "ML_INTERN_CODEX_BASE_URL"
@@ -303,68 +303,95 @@ async def call_codex_responses(
     finish_reason: str | None = None
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
-        async with client.stream("POST", _codex_url(), headers=headers, json=body) as response:
-            if response.status_code >= 400:
-                text = await response.aread()
-                raise RuntimeError(f"Codex API error {response.status_code}: {text.decode('utf-8', 'replace')}")
-            async for event in _iter_sse_lines(response):
-                etype = event.get("type")
-                if etype == "response.output_text.delta":
-                    delta = event.get("delta") or ""
-                    full_content += delta
-                    if stream and on_text_delta and delta:
-                        await on_text_delta(delta)
-                elif etype == "response.output_item.added" and isinstance(event.get("item"), dict):
-                    item = event["item"]
-                    if item.get("type") == "function_call":
-                        current_tool_index = len(tool_calls_acc)
-                        tool_calls_acc[current_tool_index] = {
-                            "id": item.get("call_id") or f"call_{current_tool_index}",
-                            "type": "function",
-                            "function": {"name": item.get("name") or "", "arguments": item.get("arguments") or ""},
-                        }
-                elif etype == "response.function_call_arguments.delta" and current_tool_index is not None:
-                    tool_calls_acc[current_tool_index]["function"]["arguments"] += event.get("delta") or ""
-                elif etype == "response.function_call_arguments.done":
-                    idx = current_tool_index if current_tool_index is not None else len(tool_calls_acc)
-                    if idx not in tool_calls_acc:
-                        tool_calls_acc[idx] = {"id": f"call_{idx}", "type": "function", "function": {"name": "", "arguments": ""}}
-                    if isinstance(event.get("arguments"), str):
-                        tool_calls_acc[idx]["function"]["arguments"] = event["arguments"]
-                elif etype == "response.output_item.done" and isinstance(event.get("item"), dict):
-                    item = event["item"]
-                    if item.get("type") == "message":
-                        text = "".join(
-                            part.get("text") or part.get("refusal") or ""
-                            for part in item.get("content", [])
-                            if isinstance(part, dict)
-                        )
-                        if text and not full_content:
-                            full_content = text
-                    elif item.get("type") == "function_call":
+        for attempt in range(2):
+            async with client.stream("POST", _codex_url(), headers=headers, json=body) as response:
+                if response.status_code == 401 and attempt == 0 and auth.auth_file:
+                    text = await response.aread()
+                    if "token_expired" in text.decode("utf-8", "replace"):
+                        try:
+                            raw = load_codex_subscription_auth(auth.auth_file, refresh=False)
+                            refresh_token = None
+                            if raw is not None:
+                                # Read the file directly so we can force a refresh even
+                                # when Codex's last_refresh timestamp looks recent but
+                                # the backend has already expired/revoked the access token.
+                                with auth.auth_file.open("r", encoding="utf-8") as f:
+                                    auth_json = json.load(f)
+                                tokens = auth_json.get("tokens") if isinstance(auth_json, dict) else None
+                                refresh_token = tokens.get("refresh_token") if isinstance(tokens, dict) else None
+                            if isinstance(refresh_token, str) and refresh_token:
+                                refresh_codex_subscription_auth(auth.auth_file, refresh_token)
+                                refreshed = load_codex_subscription_auth(auth.auth_file, refresh=False)
+                            else:
+                                refreshed = None
+                        except Exception:
+                            refreshed = None
+                        if refreshed and refreshed.access_token != auth.access_token:
+                            auth = refreshed
+                            headers = build_codex_headers(auth, session_id=session_id)
+                            continue
+                    raise RuntimeError(f"Codex API error 401: {text.decode('utf-8', 'replace')}")
+                if response.status_code >= 400:
+                    text = await response.aread()
+                    raise RuntimeError(f"Codex API error {response.status_code}: {text.decode('utf-8', 'replace')}")
+                async for event in _iter_sse_lines(response):
+                    etype = event.get("type")
+                    if etype == "response.output_text.delta":
+                        delta = event.get("delta") or ""
+                        full_content += delta
+                        if stream and on_text_delta and delta:
+                            await on_text_delta(delta)
+                    elif etype == "response.output_item.added" and isinstance(event.get("item"), dict):
+                        item = event["item"]
+                        if item.get("type") == "function_call":
+                            current_tool_index = len(tool_calls_acc)
+                            tool_calls_acc[current_tool_index] = {
+                                "id": item.get("call_id") or f"call_{current_tool_index}",
+                                "type": "function",
+                                "function": {"name": item.get("name") or "", "arguments": item.get("arguments") or ""},
+                            }
+                    elif etype == "response.function_call_arguments.delta" and current_tool_index is not None:
+                        tool_calls_acc[current_tool_index]["function"]["arguments"] += event.get("delta") or ""
+                    elif etype == "response.function_call_arguments.done":
                         idx = current_tool_index if current_tool_index is not None else len(tool_calls_acc)
-                        tool_calls_acc[idx] = {
-                            "id": item.get("call_id") or f"call_{idx}",
-                            "type": "function",
-                            "function": {"name": item.get("name") or "", "arguments": item.get("arguments") or "{}"},
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {"id": f"call_{idx}", "type": "function", "function": {"name": "", "arguments": ""}}
+                        if isinstance(event.get("arguments"), str):
+                            tool_calls_acc[idx]["function"]["arguments"] = event["arguments"]
+                    elif etype == "response.output_item.done" and isinstance(event.get("item"), dict):
+                        item = event["item"]
+                        if item.get("type") == "message":
+                            text = "".join(
+                                part.get("text") or part.get("refusal") or ""
+                                for part in item.get("content", [])
+                                if isinstance(part, dict)
+                            )
+                            if text and not full_content:
+                                full_content = text
+                        elif item.get("type") == "function_call":
+                            idx = current_tool_index if current_tool_index is not None else len(tool_calls_acc)
+                            tool_calls_acc[idx] = {
+                                "id": item.get("call_id") or f"call_{idx}",
+                                "type": "function",
+                                "function": {"name": item.get("name") or "", "arguments": item.get("arguments") or "{}"},
+                            }
+                    elif etype in {"response.completed", "response.done", "response.incomplete"}:
+                        resp = event.get("response") or {}
+                        resp_usage = resp.get("usage") or {}
+                        cached = (resp_usage.get("input_tokens_details") or {}).get("cached_tokens") or 0
+                        usage = {
+                            "prompt_tokens": max(0, (resp_usage.get("input_tokens") or 0) - cached),
+                            "completion_tokens": resp_usage.get("output_tokens") or 0,
+                            "total_tokens": resp_usage.get("total_tokens") or 0,
+                            "cache_read_tokens": cached,
+                            "cache_creation_tokens": 0,
                         }
-                elif etype in {"response.completed", "response.done", "response.incomplete"}:
-                    resp = event.get("response") or {}
-                    resp_usage = resp.get("usage") or {}
-                    cached = (resp_usage.get("input_tokens_details") or {}).get("cached_tokens") or 0
-                    usage = {
-                        "prompt_tokens": max(0, (resp_usage.get("input_tokens") or 0) - cached),
-                        "completion_tokens": resp_usage.get("output_tokens") or 0,
-                        "total_tokens": resp_usage.get("total_tokens") or 0,
-                        "cache_read_tokens": cached,
-                        "cache_creation_tokens": 0,
-                    }
-                    finish_reason = _finish_reason(resp.get("status"), bool(tool_calls_acc))
-                elif etype == "error":
-                    raise RuntimeError(f"Codex error: {event.get('message') or event.get('code') or event}")
-                elif etype == "response.failed":
-                    err = (event.get("response") or {}).get("error") or {}
-                    raise RuntimeError(f"Codex response failed: {err.get('message') or err.get('code') or event}")
+                        finish_reason = _finish_reason(resp.get("status"), bool(tool_calls_acc))
+                    elif etype == "error":
+                        raise RuntimeError(f"Codex error: {event.get('message') or event.get('code') or event}")
+                    elif etype == "response.failed":
+                        err = (event.get("response") or {}).get("error") or {}
+                        raise RuntimeError(f"Codex response failed: {err.get('message') or err.get('code') or event}")
 
     usage_obj = SimpleNamespace(
         prompt_tokens=usage.get("prompt_tokens", 0),
